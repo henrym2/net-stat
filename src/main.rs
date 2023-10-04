@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::{collections::HashMap, iter::zip};
 
 use anyhow::Result;
 use crossterm::{
@@ -9,7 +9,7 @@ use crossterm::{
 use ratatui::{
     prelude::{Constraint, CrosstermBackend, Direction, Layout, Margin, Rect, Terminal},
     text::{Line, Text},
-    widgets::{self, Block, Borders, Paragraph, Sparkline},
+    widgets::{Block, Borders, Paragraph, Sparkline},
 };
 use sysinfo::{MacAddr, NetworkData, NetworkExt, System, SystemExt};
 
@@ -66,69 +66,50 @@ pub enum Action {
 
 // App ui render function
 fn ui(f: &mut Frame<'_>, app: &App) {
-    // calc_network_interfaces(f, app, None);
-    calc_network_graphs(f, app,None);
+    calc_network_status(f, app, None);
 }
 
-fn calc_network_interfaces(f: &mut Frame<'_>, app: &App, inner_layout: Option<Rect>) {
-    let mut widgets = Vec::new();
+fn create_interface_paragraph(interface: &InterfaceData) -> Paragraph {
+    let lines = vec![
+        Line::from(format!("Interface: {}", interface.name)),
+        Line::from(format!(
+            "Sent/Recieved: {} / {}",
+            interface.sent, interface.rec
+        )),
+        Line::from(format!(
+            "Total Send/Recieved {} / {}",
+            interface.sent_total, interface.rec_total
+        )),
+        Line::from(format!("Mac Address {}", interface.mac)),
+    ];
+    let text = Text::from(lines);
+    let block = Block::default().borders(Borders::ALL);
+    return Paragraph::new(text).block(block);
+}
+
+fn create_interface_graph<'a>(name: &'a String, val: &'a Vec<u64>) -> Sparkline<'a> {
+    let block = Block::default()
+        .title(name.to_string())
+        .borders(Borders::all());
+    return Sparkline::default().block(block).data(val);
+}
+
+fn calc_network_status(f: &mut Frame<'_>, app: &App, inner_layout: Option<Rect>) {
+    let mut network_data = Vec::new();
+    let mut network_spark = Vec::new();
 
     app.interfaces.iter().for_each(|interface| {
-        let lines = vec![
-            Line::from(format!("Interface: {}", interface.name)),
-            Line::from(format!(
-                "Sent/Recieved: {} / {}",
-                interface.sent, interface.rec
-            )),
-            Line::from(format!(
-                "Total Send/Recieved {} / {}",
-                interface.sent_total, interface.rec_total
-            )),
-            Line::from(format!("Mac Address {}", interface.mac)),
-        ];
-        let text = Text::from(lines);
-        let block = Block::default().borders(Borders::ALL);
-        let paragraph = Paragraph::new(text).block(block);
-        widgets.push(paragraph);
+        let paragraph = create_interface_paragraph(interface);
+        network_data.push(paragraph);
     });
-
-    let percentage: u16 = (100 / widgets.len()).try_into().unwrap();
-    let constraints: Vec<Constraint> = widgets
-        .iter()
-        .map(|_| Constraint::Percentage(percentage))
-        .collect();
-    let inner_slot = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints(constraints);
-
-    let slot = match inner_layout {
-        Some(layout) => inner_slot.split(layout.inner(&Margin {
-            horizontal: 1,
-            vertical: 1,
-        })),
-        None => inner_slot.split(f.size().inner(&Margin {
-            horizontal: 1,
-            vertical: 1,
-        })),
-    };
-    for (i, p) in widgets.into_iter().enumerate() {
-        f.render_widget(p, slot[i])
-    }
-}
-
-fn calc_network_graphs(f: &mut Frame<'_>, app: &App, inner_layout: Option<Rect>) {
-    let mut widgets = Vec::new();
 
     app.interface_graphs.iter().for_each(|(k, v)| {
-        let block = Block::default()
-            .title(k.to_string())
-            .borders(Borders::all());
-        let spark = Sparkline::default().block(block).data(v);
-        widgets.push(spark);
+        let spark = create_interface_graph(k, v);
+        network_spark.push(spark);
     });
 
-    let percentage: u16 = (100 / widgets.len()).try_into().unwrap();
-    let constraints: Vec<Constraint> = widgets
+    let percentage: u16 = (100 / network_data.len()).try_into().unwrap();
+    let constraints: Vec<Constraint> = network_data
         .iter()
         .map(|_| Constraint::Percentage(percentage))
         .collect();
@@ -146,8 +127,15 @@ fn calc_network_graphs(f: &mut Frame<'_>, app: &App, inner_layout: Option<Rect>)
             vertical: 1,
         })),
     };
-    for (i, p) in widgets.into_iter().enumerate() {
-        f.render_widget(p, slot[i])
+
+    let widgets_zip = zip(network_data, network_spark);
+    for (i, (data, spark)) in widgets_zip.enumerate() {
+        let inner_slot = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
+            .split(slot[i]);
+        f.render_widget(data, inner_slot[0]);
+        f.render_widget(spark, inner_slot[1]);
     }
 }
 
@@ -193,7 +181,9 @@ fn update_graph_data(app: &mut App) {
     app.interfaces.iter().for_each(|interface| {
         app.interface_graphs
             .entry(interface.name.to_string())
-            .and_modify(|l| l.push(interface.sent))
+            .and_modify(|l| {
+                l.push(interface.sent);
+            })
             .or_insert(vec![interface.sent]);
     });
 }
